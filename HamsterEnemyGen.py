@@ -234,8 +234,8 @@ health_10_freq = []
 plt.ion()
 fig=plt.figure()
 plt.xlabel('Generation')
-plt.ylabel('Percentage')
-plt.title('Health Component Frequency')
+plt.ylabel('Fitness')
+plt.title('Overall Fitness')
 
 generation_reset_counter = 0
 
@@ -333,8 +333,9 @@ while percent_fit < desired_overall_fitness:
 
 
     # export to graphs
-    plt.stackplot(num_generation_history, health_1_freq, health_2_freq, health_3_freq, health_4_freq, health_5_freq, health_6_freq, health_7_freq, health_8_freq, health_9_freq, health_10_freq)
-    plt.pause(0.01)
+    # plt.stackplot(num_generation_history, health_1_freq, health_2_freq, health_3_freq, health_4_freq, health_5_freq, health_6_freq, health_7_freq, health_8_freq, health_9_freq, health_10_freq)
+    plt.plot(fitness_history, color='orange')
+    plt.pause(0.05)
 
     # export to excel
     ws.cell(num_current_generation + 2, 1, num_current_generation)
