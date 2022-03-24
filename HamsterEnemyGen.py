@@ -1,7 +1,13 @@
+import sys
+import os
 import random
+import time
 import statistics
 import openpyxl
+import plotly.graph_objects as go
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib import style
 import numpy as np
 from numpy import diff
 from collections import Counter
@@ -34,55 +40,63 @@ class Enemy:
         if isinstance(other, Enemy):
             return self.species == other.species and self.trait == other.trait and self.health == other.health
 
-
-def pick_random(health_deck):
+def get_random(pool):
   r, s = random.random(), 0
-  for num in health_deck:
-    s += num[1]
+  for item in pool:
+    s += item[1]
     if s >= r:
-      return num[0]
+      return item[0]
 
 def generate_enemies(species_list, traits_pool, health_pool, num_enemies):
     enemies = []
-    for i in range(num_enemies):
+    count = 0
+    while count < num_enemies:
         current_enemy_species = random.choice(species_list)
-        current_enemy_trait = pick_random(traits_pool)
+        current_enemy_trait = get_random(traits_pool)
         current_enemy_health = []
-        current_enemy_health.append(pick_random(health_pool))
-        current_enemy_health.append(pick_random(health_pool))
+        current_enemy_health.append(get_random(health_pool))
+        current_enemy_health.append(get_random(health_pool))
         current_enemy = Enemy(current_enemy_species, current_enemy_trait, current_enemy_health)
         enemies.append(current_enemy)
+        count += 1
     return enemies
 
 def get_enemy_fitness(enemy):
-    target = 7
-    return abs(target - (sum(enemy.health) + enemy.trait.vulnerability))
-
-def get_enemies_fitness(enemies):
-    fitness = 0
-    for enemy in enemies:
-        fitness += get_enemy_fitness(enemy)
+    global target_health_global
+    fitness = abs(target_health_global - (sum(enemy.health) + enemy.trait.vulnerability))
     return fitness
 
-def get_fit_percentage(enemies):
-    num_fit = sum((get_enemy_fitness(enemy) == 0) for enemy in enemies)
-    return num_fit / len(enemies)
+def get_total_fitness(enemies):
+    fitness = sum(map(get_enemy_fitness, enemies))
+    return fitness
 
 def sort_by_fitness(enemies):
     return sorted(enemies, key=get_enemy_fitness)
 
-def get_fit_enemies(enemies, cutoff):
-    fit_enemies = []
-    for enemy in enemies:
-        if get_enemy_fitness(enemy) < cutoff:
-            fit_enemies.append(enemy)
-    return fit_enemies
+def is_fittest(enemy, cutoff):
+    return get_enemy_fitness(enemy) <= cutoff
+
+def get_fittest_enemies(enemies, cutoff):
+    fittest_enemies = list(filter(lambda enemy: is_fittest(enemy, cutoff), enemies))
+    return fittest_enemies
+
+def get_percentage_fittest(enemies, cutoff):
+    num_enemies = len(enemies)
+    num_fittest_enemies = len(get_fittest_enemies(enemies, cutoff))
+    return num_fittest_enemies / num_enemies
 
 def get_popular_trait(enemies):
     traits = []
     for enemy in enemies:
         traits.append(enemy.trait.name)
     return statistics.mode(traits)
+
+def get_popular_health_component(enemies):
+    components = []
+    for enemy in enemies:
+        components.append(enemy.health[0])
+        components.append(enemy.health[1])
+    return statistics.mode(components)
 
 def mutate_traits_pool(enemies, traits_pool):
     trait_names = []
@@ -109,43 +123,7 @@ def mutate_health_pool(enemies, health_pool):
         mutated_health_pool.append([num[0], health_component_frequency])
     return mutated_health_pool
 
-def get_popular_health_component(enemies):
-    components = []
-    for enemy in enemies:
-        components.append(enemy.health[0])
-        components.append(enemy.health[1])
-    return statistics.mode(components)
-
-def buff_trait(trait_name, buff_factor, traits_pool):
-    if buff_factor == 0:
-        return traits_pool
-    buffed_traits_pool = []
-    nerf_factor = buff_factor / (len(traits_pool) - 1)
-    for trait in traits_pool:
-        if trait[0].name == trait_name:
-            if trait[1] >= 1:
-                return traits_pool
-            else: 
-                buffed_traits_pool.append([trait[0], trait[1] + buff_factor])
-        else:
-            buffed_traits_pool.append([trait[0], trait[1] - nerf_factor])
-    return buffed_traits_pool
-
-def buff_health_component(health_num, buff_factor, health_pool):
-    if buff_factor == 0:
-        return health_pool
-    buffed_health_pool = []
-    nerf_factor = buff_factor / (len(health_pool) - 1)
-    for health_component in health_pool:
-        if health_component[0] == health_num:
-            if health_component[1] >= 1:
-                return health_pool
-            else: 
-                buffed_health_pool.append([health_component[0], health_component[1] + buff_factor])
-        else:
-            buffed_health_pool.append([health_component[0], health_component[1] - nerf_factor])
-    return buffed_health_pool
-
+# initialize pools
 def species_list_init():
     return ["Bullfrog", 
             "Rat", 
@@ -182,27 +160,15 @@ def health_pool_init():
             [9, 0.1],
             [10, 0.1]]
 
-# Genetic Evolution Program
-
-# Initial Conditions
+# initialize pools
 species_list = species_list_init()
 traits_pool = traits_pool_init()
 health_pool = health_pool_init()
 
-wb = openpyxl.Workbook()
-ws = wb.active
-ws.cell(1, 1, "Generation")
-ws.cell(1, 2, "Overall Fitness")
-col = 3
-for trait in traits_pool:
-    ws.cell(1, col, trait[0].name)
-    col += 1
-for num in health_pool:
-        ws.cell(1, col, num[0])
-        col += 1
-
-percent_fit = 0
+# initalize trackers
+overall_fitness = 0
 num_current_generation = 0
+generation_reset_counter = 0
 fitness_history = []
 num_generation_history = []
 
@@ -230,33 +196,39 @@ health_8_freq = []
 health_9_freq = []
 health_10_freq = []
 
-# setup graphs
-plt.ion()
-fig=plt.figure()
-plt.xlabel('Generation')
-plt.ylabel('Fitness')
-plt.title('Overall Fitness')
+# initialize excel output
+wb = openpyxl.Workbook()
+ws = wb.active
+ws.cell(1, 1, "Generation")
+ws.cell(1, 2, "Overall Fitness")
+col = 3
+for trait in traits_pool:
+    ws.cell(1, col, trait[0].name)
+    col += 1
+for num in health_pool:
+        ws.cell(1, col, num[0])
+        col += 1
 
-generation_reset_counter = 0
+# initialize graphs
 
-# Main Loop
+# main
 print("Welcome to the Creature Evolver!")
 
+target_health_global = int(input("Target Health: "))
 generation_size = int(input("Generation Size: "))
-generation_limit = int(input("Generation Limit: "))
-desired_overall_fitness = int(input("Desired Fitness: "))
+num_kept_individuals = int(input("Number of Kept Individuals: "))
+generation_limit = int(input("Maximum Generations: "))
+desired_overall_fitness = int(input("Desired Overall Fitness (0 - 1): "))
 
-while percent_fit < desired_overall_fitness:
+while overall_fitness < desired_overall_fitness:
 
     num_generation_history.append(num_current_generation)
     current_generation = generate_enemies(species_list, traits_pool, health_pool, generation_size)
-    percent_fit = get_fit_percentage(current_generation)
-    fitness_history.append(percent_fit)
+    overall_fitness = get_percentage_fittest(current_generation, 0)
+    fitness_history.append(overall_fitness)
     
-
-    # fittest_individuals = get_fit_enemies(current_generation, 2)
     fittest_individuals = sort_by_fitness(current_generation)
-    fittest_individuals = fittest_individuals[:generation_size // 2]
+    fittest_individuals = fittest_individuals[:num_kept_individuals]
     best_trait = get_popular_trait(fittest_individuals)
     best_health_component = get_popular_health_component(fittest_individuals)
 
@@ -264,7 +236,7 @@ while percent_fit < desired_overall_fitness:
     print(num_current_generation, end=" | ")
 
     print("Overall Fitness: ", end="")
-    print("{:.3f}".format(percent_fit), end=" | ")
+    print("{:.3f}".format(overall_fitness), end=" | ")
 
     print("Best Health Componenent: ", end="")
     print(best_health_component, end=" | ")
@@ -329,17 +301,14 @@ while percent_fit < desired_overall_fitness:
 
         print(num[0], end=" = ")
         print("{:.3f}".format(num[1], 3), end=" | ")
-    print("\n")
+    print("")
 
 
     # export to graphs
-    # plt.stackplot(num_generation_history, health_1_freq, health_2_freq, health_3_freq, health_4_freq, health_5_freq, health_6_freq, health_7_freq, health_8_freq, health_9_freq, health_10_freq)
-    plt.plot(fitness_history, color='orange')
-    plt.pause(0.05)
 
     # export to excel
     ws.cell(num_current_generation + 2, 1, num_current_generation)
-    ws.cell(num_current_generation + 2, 2, percent_fit)
+    ws.cell(num_current_generation + 2, 2, overall_fitness)
     col = 3
     for trait in traits_pool:
         ws.cell(num_current_generation + 2, col, trait[1])
@@ -371,8 +340,6 @@ while percent_fit < desired_overall_fitness:
 
     if num_current_generation >= generation_limit:
         break
-
-plt.show()
 
 print("\n")
 print("The Chosen Ones")
